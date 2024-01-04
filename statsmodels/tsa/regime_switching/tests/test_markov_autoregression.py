@@ -903,3 +903,23 @@ class TestFilardoPandas(MarkovAutoregression):
         assert_allclose(self.result.expected_durations,
                         self.mar_filardo[['duration0', 'duration1']].iloc[5:],
                         rtol=1e-5, atol=1e-7)
+
+class TestMultiple_period_transition_matrix:
+    def aux(self, tm, steps):
+        n = tm.shape[0]
+        res = np.zeros((steps, n, n))
+        res[0] = tm
+        for t in range(1, steps):
+            res[t] = np.linalg.matrix_power(tm, t+1)
+        return res
+
+    def test_multiple_period_transition_matrix(self):
+        n = 6
+        a = np.random.rand(n,n)
+        a = a/np.sum(a, axis=0)
+
+        steps = 5
+
+        actual = markov_autoregression.multiple_period_transition_matrix(a, steps)
+        expected = self.aux(a, steps)
+        assert_allclose(actual, expected, rtol=1e-5, atol=1.e-7)

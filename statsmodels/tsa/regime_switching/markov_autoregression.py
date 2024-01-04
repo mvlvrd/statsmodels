@@ -5,8 +5,9 @@ Author: Chad Fulton
 License: BSD-3
 """
 
-
 import numpy as np
+from scipy.special import logsumexp
+
 import statsmodels.base.wrapper as wrap
 
 from statsmodels.tsa.tsatools import lagmat
@@ -483,7 +484,93 @@ class MarkovAutoregressionResults(markov_regression.MarkovRegressionResults):
     scale : float
         This is currently set to 1.0 and not used by the model or its results.
     """
-    pass
+
+    def forecast(self, steps:int=1, exog=None, method:str=None) -> np.ndarray:
+        """
+        Forecast the next steps of the model.
+
+        Parameters
+        ----------
+        self : A MarkovRegressionResults object
+        steps : int, optional
+               The number of future steps where to forecast the model. Default is 1.
+        exog : array-like, optional
+               A [steps, k_regimes] array with the values of the exogenous variables.
+        method : str, optional
+                If None, it returns a tuple (a,b) of two array[steps, k_regimes] 
+                with a the forecasted values and b its probabilities.
+                If 'MAP' the Maximum A Posteriori value is returned.
+                If 'EV' the expected value.
+
+        Returns
+        -------
+        forecast : array [steps] or tuple (array[steps, k_regimes], array[steps, k_regimes])
+            Array or tuple according with the value of the method parameter.
+        """
+        if (exog is None and self.model.k_exog > 0) or (
+            exog.shape[0] < steps) or (
+            exog.shape[1] != self.model.k_exog):
+            raise ValueError("The exog array should have shape (steps, k) with k the number of exog params.")
+        if method not in (None, 'MAP', 'EV'):
+            raise ValueError(f"The prediction method should be None, 'MAP' or 'EV', not {method}")
+
+        k_regimes = self.k_regimes
+        order = self.model.order
+
+        next_states_p_l = np.zeros((order + steps, k_regimes), dtype=self.params.dtype)
+        next_states_p_l[:order] = np.log(self.smoothed_marginal_probabilities.iloc[-order:].values)
+        # TODO: Make this work with time-varying transition matrices.
+        rtm = self.model.regime_transition_matrix(self.params)
+        if rtm.shape[2] != 1:
+            raise ValueError('Forecast with time-varying transition matrices not implemented.')
+        rtm = rtm.squeeze(axis=2)
+        transition_matrix_l = np.log(rtm)
+        for i in range(order, order+steps):
+            next_states_p_l[i] = logsumexp(transition_matrix_l + next_states_p_l[i-1:i,:], axis=1)
+        next_states_p = np.exp(next_states_p_l)
+
+        # Trend
+        #TODO: Check it works for last observations.
+        trend_exog = None
+        if self.model.trend == 'c':
+            trend_exog = np.ones((steps, 1))
+        elif self.model.trend == 't':
+            trend_exog = (np.arange(steps) + 1 + self.model.nobs)[:, np.newaxis]
+        elif self.model.trend == 'ct':
+            trend_exog = np.c_[np.ones((steps, 1)),
+                               (np.arange(steps) + 1 + self.model.nobs)[:, np.newaxis]]
+        if trend_exog is not None:
+            exog = trend_exog if exog is None else np.c_[trend_exog, exog[:steps]]
+        exog = np.vstack((self.model.exog[-order:], exog))
+
+        forecast_exog = np.zeros((order + steps, k_regimes), dtype=self.params.dtype)
+        for j in range(k_regimes):
+            forecast_exog[:, j] = np.dot(exog, self.params.iloc[self.model.parameters[j, 'exog']])
+
+        #Full model prediction
+        alpha = self.params.iloc[self.model.parameters['autoregressive']].values.reshape((order, k_regimes))[::-1, :]
+        tm = multiple_period_transition_matrix(rtm, order)
+        # y is the actual observation for the first order-indexes
+        # and the predicted expected value for the last steps-indexes.
+        y = np.zeros((order + steps, k_regimes), dtype=self.params.dtype)
+        y[:order] = self.model.orig_endog[-order:, np.newaxis]
+        ar_component = y[:order] - forecast_exog[:order]
+        for t in range(order, order+steps):
+            y[t] = forecast_exog[t] + np.einsum('ij,ij,ikj,ij',
+                alpha, ar_component, tm, next_states_p[t-order:t, :])/next_states_p[t]
+            ar_component[:-1] = ar_component[1:]
+            ar_component[-1] = y[t] - forecast_exog[t]
+
+        forecast = y[-steps:]
+        next_states_p = next_states_p[-steps:]
+        if method == 'MAP':
+            forecast = forecast[np.arange(steps), np.argmax(next_states_p, axis=1)]
+        elif method == 'EV':
+            forecast = np.average(forecast, axis=1, weights=next_states_p)
+        else:
+            return (forecast, next_states_p)
+
+        return forecast
 
 
 class MarkovAutoregressionResultsWrapper(
@@ -491,3 +578,25 @@ class MarkovAutoregressionResultsWrapper(
     pass
 wrap.populate_wrapper(MarkovAutoregressionResultsWrapper,  # noqa:E305
                       MarkovAutoregressionResults)
+
+def multiple_period_transition_matrix(tm, steps):
+    """
+    Parameters
+    ----------
+    tm : ndarray with shape (n, n)
+    steps :
+
+    Returns
+    -------
+    tm_mp : ndarray with shape (steps, n, n) tm_mp[i] is tm_l**(i+1)
+    """
+    n = tm.shape[0]
+    tm_mp_l = np.zeros((steps, n, n), dtype=tm.dtype)
+    tm_mp_l[0] = np.log(tm)
+    tm_t_l = tm_mp_l[0].T.reshape(1,n,n).copy()
+
+    for t in range(1, steps):
+        prev = tm_mp_l[t-1].reshape(n,1,n)
+        tm_mp_l[t] = logsumexp(prev + tm_t_l, axis=-1)
+
+    return np.exp(tm_mp_l)

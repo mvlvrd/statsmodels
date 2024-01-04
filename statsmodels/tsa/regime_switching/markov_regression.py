@@ -5,6 +5,8 @@ Author: Chad Fulton
 License: BSD-3
 """
 import numpy as np
+from scipy.special import logsumexp
+
 import statsmodels.base.wrapper as wrap
 
 from statsmodels.tsa.regime_switching import markov_switching
@@ -446,7 +448,73 @@ class MarkovRegressionResults(markov_switching.MarkovSwitchingResults):
     scale : float
         This is currently set to 1.0 and not used by the model or its results.
     """
-    pass
+
+    def forecast(self, steps:int=1, exog=None, method:str=None) -> np.ndarray:
+        """
+        Forecast the next steps of the model.
+
+        Parameters
+        ----------
+        self : A MarkovRegressionResults object
+        steps : int, optional
+               The number of future steps where to forecast the model. Default is 1.
+        exog : array-like, optional
+               A [steps, k_regimes] array with the values of the exogenous variables.
+        method : str, optional
+                If None, It returns a tuple (a,b) of two array[steps, k_regimes]
+                with a the forecasted values and b its probabilities.
+                If 'MAP' the Maximum A Posteriori value is returned.
+                If 'EV' the expected value.
+
+        Returns
+        -------
+        forecast : array [steps] or tuple (array[steps, k_regimes], array[steps, k_regimes])
+            Array or tuple according with the value of the method parameter.
+        """
+        if (exog is None and self.model.k_exog > 0) or (
+            exog.shape[0] < steps) or (
+            exog.shape[1] != self.model.k_exog):
+            raise ValueError("The exog array should have shape (steps, k) with k the number of exog params.")
+        if method not in (None, 'MAP', 'EV'):
+            raise ValueError(f"The prediction method should be None, 'MAP' or 'EV', not {method}")
+
+        next_states_p_l = np.zeros((steps, self.k_regimes), dtype=self.params.dtype)
+        last_state_p_l = np.log(self.smoothed_marginal_probabilities.iloc[-1].values)
+        #TODO: Make this work with time-varying transition matrices.
+        rtm = self.model.regime_transition_matrix(self.params)
+        if rtm.shape[2] != 1:
+            raise ValueError('Forecast with time-varying transition matrices not implemented still.')
+        transition_matrix_l = np.log(rtm.squeeze(axis=2))
+        for i in range(steps):
+            last_state_p_l = logsumexp(transition_matrix_l + last_state_p_l[np.newaxis,:], axis=1)
+            next_states_p_l[i, :] = last_state_p_l
+        next_states_p = np.exp(next_states_p_l)
+
+        # Trend
+        trend_exog = None
+        if self.model.trend == 'c':
+            trend_exog = np.ones((steps, 1))
+        elif self.model.trend == 't':
+            trend_exog = (np.arange(steps) + 1 + self.model.nobs)[:, np.newaxis]
+        elif self.model.trend == 'ct':
+            trend_exog = np.c_[np.ones((steps, 1)),
+                               (np.arange(steps) + 1 + self.model.nobs)[:, np.newaxis]]
+        if trend_exog is not None:
+            exog = trend_exog if exog is None else np.c_[trend_exog, exog[:steps]]
+
+        forecast_exog = np.zeros((steps, self.k_regimes), dtype=self.params.dtype)
+        for i in range(self.k_regimes):
+            forecast_exog[:, i] = np.dot(exog, self.params.iloc[self.model.parameters[i, 'exog']])
+
+        forecast = forecast_exog
+        if method == 'MAP':
+            forecast = forecast[np.arange(steps), np.argmax(next_states_p, axis=1)]
+        elif method == 'EV':
+            forecast = np.average(forecast, axis=1, weights=next_states_p)
+        else:
+            return (forecast, next_states_p)
+
+        return forecast
 
 
 class MarkovRegressionResultsWrapper(
