@@ -411,7 +411,7 @@ class MarkovAutoregression(markov_regression.MarkovRegression):
             evaluation.
         """
         # Inherited parameters
-        constrained = super(MarkovAutoregression, self).transform_params(
+        constrained = super().transform_params(
             unconstrained)
 
         # Autoregressive
@@ -441,7 +441,7 @@ class MarkovAutoregression(markov_regression.MarkovRegression):
             Array of unconstrained parameters used by the optimizer.
         """
         # Inherited parameters
-        unconstrained = super(MarkovAutoregression, self).untransform_params(
+        unconstrained = super().untransform_params(
             constrained)
 
         # Autoregressive

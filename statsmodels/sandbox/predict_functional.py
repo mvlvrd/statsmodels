@@ -162,7 +162,7 @@ def _make_exog_from_formula(result, focus_var, summaries, values, num_points):
     # extra variables not referenced in the formula RHS, this may not
     # be a problem, so just warn.  There is no obvious way to extract
     # from a formula all the variable names that it references.
-    varl = set(exog.columns.tolist()) - set([model.endog_names])
+    varl = set(exog.columns.tolist()) - {model.endog_names}
     unmatched = varl - set(colnames)
     unmatched = list(unmatched)
     if len(unmatched) > 0:
@@ -420,7 +420,7 @@ def _glm_basic_scr(result, exog, alpha):
     B = np.linalg.cholesky(A).T # Upper Cholesky triangle
 
     # The variance and SD of the linear predictor at each row of exog.
-    sigma2 = (np.dot(exog, cov) * exog).sum(1)
+    sigma2 = (np.dot(exog, cov) * exog).sum(axis=1)
     sigma = np.asarray(np.sqrt(sigma2))
 
     # Calculate kappa_0 (formula 42 from Sun et al)

@@ -420,14 +420,6 @@ def get_prediction_index(
             prediction_index = data.row_labels[start : end + 1]
         # Otherwise, warn the user that they will get an NumericIndex
         else:
-            if not silent:
-                warnings.warn(
-                    "No supported index is available."
-                    " Prediction results will be given with"
-                    " an integer index beginning at `start`.",
-                    ValueWarning,
-                    stacklevel=2,
-                )
             warnings.warn(
                 "No supported index is available. In the next"
                 " version, calling this method in a model"
@@ -612,7 +604,7 @@ class TimeSeriesModel(base.LikelihoodModel):
                     resampled_index = date_range(
                         start=index[0], end=index[-1], freq=freq
                     )
-                    if not inferred_freq and not resampled_index.equals(index):
+                    if not inferred_freq and not (resampled_index == index).all():
                         raise ValueError(
                             "The given frequency argument could"
                             " not be matched to the given index."
@@ -659,8 +651,9 @@ class TimeSeriesModel(base.LikelihoodModel):
         # Issue warnings for unsupported indexes
         if has_index and not (date_index or range_index or is_increment):
             warnings.warn(
-                "An unsupported index was provided and will be"
-                " ignored when e.g. forecasting.",
+                "An unsupported index was provided. As a result, forecasts "
+                "cannot be generated. To use the model for forecasting, use on the "
+                "the supported classes of index.",
                 ValueWarning,
                 stacklevel=2,
             )
